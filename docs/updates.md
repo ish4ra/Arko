@@ -186,3 +186,32 @@ GitHub raw serves the committed bytes over HTTPS; the signed appcast retains its
 absolute HTTPS release-enclosure URL. Thus changing the host path preserves
 Sparkle's native verification and installation flow. CI additionally verifies
 byte-for-byte public raw delivery with the pinned Sparkle signing tool.
+
+## Recovery from a stale Check for Updates menu
+
+Affected development builds can say “Updates are not configured in this build”
+even when `SUPublicEDKey` is present: the application menu was created before
+Sparkle started, and retained its initial fallback action. The fix retains and
+refreshes both updater menu items after startup, including a quiet Finder launch
+followed by an interactive reopen. It does not start Sparkle during quiet Finder
+operations. Genuinely keyless builds still show the configuration message.
+
+For an affected installation, make one manual replacement using the fixed build:
+
+1. Download the Universal development DMG from the successful fix workflow's
+   `Arkiv-universal-development-dmg` artifact, or its signed development release's
+   `Arkiv-universal.zip` asset.
+2. Quit Arkiv after archive operations finish. Open the DMG and drag Arkiv.app to
+   Applications, confirming replacement. For the ZIP, unzip and replace the app
+   in Applications. Eject the DMG and launch the installed app.
+3. Apply the existing [development first-launch instructions](release.md#signing-notarization-and-gatekeeper)
+   if macOS blocks the manual download. The build remains ad-hoc signed and not
+   notarized; this fix does not change signing policy or update keys.
+4. Choose **Arkiv → Check for Updates…**. Sparkle should show an update or “up to
+   date”, rather than the configuration alert. **Automatically Check for Updates**
+   should be enabled and reflect the stored Sparkle preference.
+5. Quit, invoke Finder **Extract Here** on a test archive, then open Arkiv from
+   Applications/Dock. The same updater menu must work after this delayed startup.
+
+Future signed updates continue through the existing atomic feed. No EdDSA key
+regeneration or GitHub secret changes are required for this fix.

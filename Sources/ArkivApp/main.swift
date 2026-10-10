@@ -6,7 +6,16 @@ import ArkivCore
 import ArkivPresentation
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let updates = UpdateController()
+    private let updates: UpdateController
+    private let launchArguments: [String]
+    private let presentFinderSetup: (() -> Void)?
+    override convenience init() {
+        self.init(updates: UpdateController(), launchArguments: CommandLine.arguments)
+    }
+    init(updates: UpdateController, launchArguments: [String], presentFinderSetup: (() -> Void)? = nil) {
+        self.updates = updates; self.launchArguments = launchArguments; self.presentFinderSetup = presentFinderSetup
+        super.init()
+    }
     private let finderDeliveryDiagnostic = FinderDeliveryDiagnostic.fromArguments()
     private lazy var finderSetup = FinderSetupWindowController()
     private let creation = ArchiveCreationController()
@@ -25,7 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenus()
-        if Self.shouldShowInitialBrowser(arguments: CommandLine.arguments, handledRequest: handledLaunchRequest) {
+        if Self.shouldShowInitialBrowser(arguments: launchArguments, handledRequest: handledLaunchRequest) {
             if windows.isEmpty { newWindow(nil) }
             NSApp.activate(ignoringOtherApps: true)
             beginInteractiveSession()
@@ -35,7 +44,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !startedInteractiveSession, finderDeliveryDiagnostic == nil else { return }
         startedInteractiveSession = true
         updates.start()
-        DispatchQueue.main.async { [weak self] in self?.finderSetup.presentIfNeeded() }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if let presentFinderSetup = self.presentFinderSetup { presentFinderSetup() }
+            else { self.finderSetup.presentIfNeeded() }
+        }
     }
     func applicationDidBecomeActive(_ notification: Notification) {
         finderSetup.refresh()
