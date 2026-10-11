@@ -617,3 +617,128 @@ integrity_done:
     if (fstat(fd, &after) || !create_same_stat(&before, &after)) result = fail(error, capacity, "Archive changed during testing.");
     close(fd); return result;
 }
+
+#ifdef __APPLE__
+#include <copyfile.h>
+#endif
+struct zip_envelope { uint32_t offset, size; uint16_t count, comment; unsigned char end[65557]; };
+struct arkiv_zip_transaction {
+    int source, parent, stage; char *name, *parent_path; struct stat stamp, replacement_stamp; int ready; struct zip_envelope zip;
+};
+static void zip_put16(unsigned char *p, uint16_t v) { p[0]=v; p[1]=v>>8; }
+static void zip_put32(unsigned char *p, uint32_t v) { zip_put16(p,v);zip_put16(p+2,v>>16); }
+/* Reject ambiguous/special layouts; copy every accepted local record and metadata byte unchanged. */
+static int zip_envelope(int fd, struct zip_envelope *z) {
+    struct stat st; unsigned char tail[65557];
+    if(fstat(fd,&st)||!S_ISREG(st.st_mode)||st.st_size<22||st.st_size>=UINT32_MAX)return 0;
+    size_t n=(uint64_t)st.st_size<sizeof(tail)?(size_t)st.st_size:sizeof(tail);
+    if(pread(fd,tail,n,st.st_size-n)!=(ssize_t)n)return 0;
+    size_t p=n-22;
+    for(;;) { if(!memcmp(tail+p,"PK\005\006",4)&&integrity_u16(tail+p+20)==n-p-22)break;if(!p)return 0;p--; }
+    unsigned char *e=tail+p;z->count=integrity_u16(e+10);z->offset=integrity_u32(e+16);z->size=integrity_u32(e+12);z->comment=integrity_u16(e+20);
+    if(integrity_u16(e+4)||integrity_u16(e+6)||integrity_u16(e+8)!=z->count||z->count==65535||
+       (uint64_t)z->offset+z->size!=(uint64_t)st.st_size-n+p)return 0;
+    uint64_t cursor=z->offset, localEnd=0;
+    for(unsigned i=0;i<z->count;i++) {
+        unsigned char h[46],l[30];
+        if(cursor+46>(uint64_t)z->offset+z->size||pread(fd,h,46,cursor)!=46||memcmp(h,"PK\001\002",4))return 0;
+        uint16_t flags=integrity_u16(h+8), method=integrity_u16(h+10), name=integrity_u16(h+28), extra=integrity_u16(h+30);
+        uint32_t off=integrity_u32(h+42), compressed=integrity_u32(h+20);
+        uint64_t len=46u+name+extra+integrity_u16(h+32);
+        if(!name||flags & ~0x080e || (method!=0&&method!=8)||integrity_u16(h+34)||compressed==UINT32_MAX||integrity_u32(h+24)==UINT32_MAX||
+           cursor+len>(uint64_t)z->offset+z->size||off!=localEnd||pread(fd,l,30,off)!=30||memcmp(l,"PK\003\004",4)||
+           integrity_u16(l+6)!=flags||integrity_u16(l+8)!=method||integrity_u16(l+26)!=name)return 0;
+        unsigned char names[65535],localnames[65535];
+        if(pread(fd,names,name,cursor+46)!=name||pread(fd,localnames,name,off+30)!=name||memcmp(names,localnames,name))return 0;
+        /* ZIP64, encryption, Unicode path aliases and opaque extras are unsafe to reinterpret.
+           Known timestamp/Unix ownership fields are preserved byte-for-byte. */
+        uint16_t lengths[2]={extra,integrity_u16(l+28)};
+        uint64_t starts[2]={cursor+46+name,(uint64_t)off+30+name};
+        for(int side=0;side<2;side++) {
+            unsigned char fields[65535];size_t q=0;
+            if(pread(fd,fields,lengths[side],starts[side])!=lengths[side])return 0;
+            while(q<lengths[side]) { if(lengths[side]-q<4)return 0;unsigned tag=integrity_u16(fields+q),s=integrity_u16(fields+q+2);
+                if(tag!=0x5455&&tag!=0x7875&&tag!=0x7855&&tag!=0x000a)return 0;
+                q+=4+s;if(q>lengths[side])return 0;
+            }
+        }
+        localEnd=(uint64_t)off+30+name+integrity_u16(l+28)+compressed;
+        if(flags&8) { unsigned char d[16];if(pread(fd,d,16,localEnd)!=16)return 0;
+            unsigned shift=!memcmp(d,"PK\007\010",4)?4:0;
+            if(integrity_u32(d+shift)!=integrity_u32(h+16)||integrity_u32(d+shift+4)!=compressed||integrity_u32(d+shift+8)!=integrity_u32(h+24))return 0;
+            localEnd+=12+shift;
+        } else if(memcmp(l+14,h+16,12))return 0;
+        if(localEnd>z->offset)return 0;
+        cursor+=len;
+    }
+    if(cursor!=(uint64_t)z->offset+z->size||localEnd!=z->offset)return 0;
+    memcpy(z->end,e,22+z->comment);return 1;
+}
+arkiv_zip_transaction *arkiv_zip_begin(const char *path,char *error,size_t cap) {
+    arkiv_zip_transaction *t=calloc(1,sizeof(*t));if(!t)return NULL;
+    t->source=t->parent=t->stage=-1;
+    char *parent=strdup(path);char *slash=parent?strrchr(parent,'/'):NULL;
+    if(!slash||!slash[1])goto bad;
+    t->name=strdup(slash+1);if(slash==parent)slash[1]=0;else *slash=0;
+    t->parent=create_open(parent);t->parent_path=parent;parent=NULL;
+    if(t->parent<0||!t->name)goto bad;
+    t->source=openat(t->parent,t->name,O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);
+    if(t->source<0||fstat(t->source,&t->stamp)||!zip_envelope(t->source,&t->zip)||faccessat(t->parent,t->name,W_OK,0)||faccessat(t->parent,".",W_OK|X_OK,0))goto bad;
+    return t;
+bad: free(parent);arkiv_zip_end(t);fail(error,cap,"This archive is read-only. Adding requires a writable, ordinary ZIP32 archive with supported metadata.");return NULL;
+}
+void arkiv_zip_end(arkiv_zip_transaction *t) { if(!t)return;if(t->source>=0)close(t->source);if(t->parent>=0)close(t->parent);if(t->stage>=0)close(t->stage);free(t->name);free(t->parent_path);free(t); }
+static int zip_copy(int in,int out,uint64_t start,uint64_t length,arkiv_cancel *token) {
+    unsigned char buffer[65536];while(length) { if(cancelled(token))return 2;size_t n=length<sizeof(buffer)?length:sizeof(buffer);
+        if(pread(in,buffer,n,start)!=(ssize_t)n)return 1;
+        size_t done=0;while(done<n){ssize_t w=write(out,buffer+done,n-done);if(w<=0)return 1;done+=w;}start+=n;length-=n;
+    }return 0;
+}
+int arkiv_zip_prepare(arkiv_zip_transaction *t,const char *addition,const char *stage,arkiv_cancel *token,arkiv_progress_callback callback,void *context,char *error,size_t cap) {
+    int in=create_open(addition),out=-1,result=1;struct zip_envelope z;struct stat st;
+    if(in<0||!zip_envelope(in,&z)||t->zip.count+z.count>=65535||
+       (uint64_t)t->zip.offset+z.offset+t->zip.size+z.size+22+t->zip.comment>=UINT32_MAX)goto done;
+    t->stage=create_open(stage);if(t->stage<0)goto done;
+    if(fstat(t->stage,&st)||!S_ISDIR(st.st_mode)||st.st_uid!=geteuid()||(st.st_mode&077)!=0||st.st_dev!=t->stamp.st_dev)goto done;
+    out=openat(t->stage,"replacement.zip",O_CREAT|O_EXCL|O_RDWR|O_NOFOLLOW|O_CLOEXEC,0600);if(out<0)goto done;
+    result=zip_copy(t->source,out,0,t->zip.offset,token);if(result)goto done;
+    result=zip_copy(in,out,0,z.offset,token);if(result)goto done;
+    result=zip_copy(t->source,out,t->zip.offset,t->zip.size,token);if(result)goto done;
+    uint64_t cursor=z.offset;
+    for(unsigned i=0;i<z.count;i++) {
+        unsigned char h[46];if(pread(in,h,46,cursor)!=46){result=1;goto done;}
+        zip_put32(h+42,integrity_u32(h+42)+t->zip.offset);
+        if(write(out,h,46)!=46){result=1;goto done;}
+        uint64_t len=integrity_u16(h+28)+integrity_u16(h+30)+integrity_u16(h+32);
+        result=zip_copy(in,out,cursor+46,len,token);if(result)goto done;cursor+=46+len;
+    }
+    unsigned char *e=t->zip.end;zip_put16(e+8,t->zip.count+z.count);zip_put16(e+10,t->zip.count+z.count);
+    zip_put32(e+12,t->zip.size+z.size);zip_put32(e+16,t->zip.offset+z.offset);
+    if(write(out,e,22+t->zip.comment)!=22+t->zip.comment){result=1;goto done;}
+#ifdef __APPLE__
+    if(fcopyfile(t->source,out,NULL,COPYFILE_METADATA)){result=1;goto done;}
+#else
+    if(fchmod(out,t->stamp.st_mode&07777)){result=1;goto done;}
+#endif
+    if(fsync(out)){result=1;goto done;}
+    char *output=NULL;if(asprintf(&output,"%s/replacement.zip",stage)<0){result=1;goto done;}
+    result=arkiv_test(output,NULL,(arkiv_limits){100000,20ULL*1024*1024*1024},token,callback,context,error,cap);free(output);
+    if(result!=0&&result!=2)result=1;
+    if(!result) { if(fstat(out,&t->replacement_stamp))result=1;else t->ready=1; }
+done:if(in>=0)close(in);if(out>=0)close(out);if(result==1)fail(error,cap,"Cannot safely build and verify the updated ZIP. Original archive unchanged.");return result;
+}
+int arkiv_zip_commit(arkiv_zip_transaction *t,arkiv_cancel *token,char *error,size_t cap) {
+    struct stat current,opened,pinned_parent,current_parent,replacement;
+    if(cancelled(token))return 2;
+    int parent_now=create_open(t->parent_path);
+    int parent_matches=parent_now>=0&&!fstat(parent_now,&current_parent)&&!fstat(t->parent,&pinned_parent)&&
+        current_parent.st_dev==pinned_parent.st_dev&&current_parent.st_ino==pinned_parent.st_ino;
+    if(parent_now>=0)close(parent_now);
+    if(!parent_matches)return fail(error,cap,"Archive parent changed during addition. Original archive was not replaced.");
+    if(!t->ready||t->stage<0||fstatat(t->stage,"replacement.zip",&replacement,AT_SYMLINK_NOFOLLOW)||
+       !create_same_stat(&t->replacement_stamp,&replacement)||fstat(t->source,&opened)||fstatat(t->parent,t->name,&current,AT_SYMLINK_NOFOLLOW)||
+       !create_same_stat(&t->stamp,&opened)||!create_same_stat(&t->stamp,&current))return fail(error,cap,"Archive changed during addition. Original archive was not replaced.");
+    if(cancelled(token))return 2;
+    if(renameat(t->stage,"replacement.zip",t->parent,t->name))return fail(error,cap,"Cannot atomically replace the archive. Original archive unchanged.");
+    return 0;
+}

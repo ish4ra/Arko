@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import ArkivCore
 @testable import ArkivApp
 
 final class BrowserWindowTests: XCTestCase {
@@ -84,6 +85,70 @@ final class BrowserWindowTests: XCTestCase {
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
         XCTAssertEqual(table.numberOfRows, 2)
         XCTAssertEqual(table.selectedRow, 1)
+    }
+    @MainActor
+    func testZIPAdditionRefreshesBrowserAndSoundsOnce() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = root.appendingPathComponent("original.txt")
+        let added = root.appendingPathComponent("追加 🐘.txt")
+        try Data("original".utf8).write(to: original)
+        try Data("added".utf8).write(to: added)
+        let archive = try ArchiveCreator().create(ArchiveCreationRequest(sources: [original], destination: root, name: "Example"),
+            cancellation: ArchiveCancellation(), progress: { _ in })
+        var sounds = 0
+        let controller = BrowserWindowController(modificationFeedback: { result in
+            ExtractionFeedback.completed(result, play: { sounds += 1 })
+        })
+        defer { controller.close() }
+        let addFiles = NSMenuItem(title: "", action: #selector(BrowserWindowController.addFiles(_:)), keyEquivalent: "")
+        let addFolder = NSMenuItem(title: "", action: #selector(BrowserWindowController.addFolder(_:)), keyEquivalent: "")
+        XCTAssertFalse(controller.validateMenuItem(addFiles))
+        controller.load(archive)
+        for _ in 0..<400 {
+            if !controller.isBusy { break }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        XCTAssertFalse(controller.isBusy)
+        XCTAssertTrue(controller.validateMenuItem(addFiles))
+        XCTAssertTrue(controller.validateMenuItem(addFolder))
+        controller.addItems([added])
+        XCTAssertTrue(controller.isBusy)
+        XCTAssertFalse(controller.validateMenuItem(addFiles))
+        for _ in 0..<400 {
+            if !controller.isBusy { break }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        XCTAssertFalse(controller.isBusy)
+        XCTAssertEqual(sounds, 1)
+        let table = try XCTUnwrap(descendants(controller.window!.contentView!).compactMap { $0 as? NSTableView }.first)
+        XCTAssertEqual(table.numberOfRows, 2)
+        XCTAssertEqual(controller.archiveURL?.standardizedFileURL, archive.standardizedFileURL)
+        let bytes = try Data(contentsOf: archive)
+        let another = root.appendingPathComponent("cancelled.txt")
+        try Data(repeating: 65, count: 1_000_000).write(to: another)
+        controller.addItems([another]); controller.cancel(nil)
+        for _ in 0..<400 {
+            if !controller.isBusy { break }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        XCTAssertFalse(controller.isBusy)
+        XCTAssertEqual(try Data(contentsOf: archive), bytes)
+        XCTAssertEqual(sounds, 1)
+        let seven = try ArchiveCreator().create(ArchiveCreationRequest(sources: [original], destination: root, name: "ReadOnly", format: .sevenZip),
+            cancellation: ArchiveCancellation(), progress: { _ in })
+        let disguised = root.appendingPathComponent("NotActuallyZIP.zip")
+        try FileManager.default.moveItem(at: seven, to: disguised)
+        controller.load(disguised)
+        for _ in 0..<400 {
+            if !controller.isBusy { break }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        XCTAssertFalse(controller.isBusy)
+        XCTAssertFalse(controller.validateMenuItem(addFiles), "A .zip extension must not grant write support to 7z")
+        XCTAssertFalse(controller.validateMenuItem(addFolder))
     }
 
 }

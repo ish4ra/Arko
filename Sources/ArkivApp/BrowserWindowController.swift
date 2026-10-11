@@ -27,6 +27,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate,
     private let noResults = NSTextField(labelWithString: "")
     private var navigationButtons: [NSButton] = []
     private var snapshot: ArchiveSnapshot?
+    private var zipAdditionAvailable = false
+    private let modificationFeedback: (Result<URL, Error>) -> Void
     private var index: ArchiveIndex?
     private var rows: [BrowserRow] = []
     private var currentPath = ""
@@ -36,7 +38,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate,
     private let engine = LibArchiveEngine()
     private let worker = DispatchQueue(label: "xyz.isharalakshan.arkiv.archive", qos: .userInitiated)
 
-    init() {
+    init(modificationFeedback: @escaping (Result<URL, Error>) -> Void = { ExtractionFeedback.completed($0) }) {
+        self.modificationFeedback = modificationFeedback
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 920, height: 580),
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init(window: window)
@@ -81,6 +84,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate,
         extract.target = self
         let copy = menu.addItem(withTitle: "Copy Path", action: #selector(copyPath(_:)), keyEquivalent: "")
         copy.target = self
+        menu.addItem(.separator())
+        for (title, action) in [("Add Files…", #selector(addFiles(_:))), ("Add Folder…", #selector(addFolder(_:)))] {
+            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+            item.target = self
+        }
         table.menu = menu
         let scroll = NSScrollView()
         scroll.documentView = table; scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = true
@@ -185,12 +193,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate,
         let token = begin("Reading archive…")
         worker.async { [self] in
             let result = Result { try self.engine.inspect(url, cancellation: token, password: password) }
+            let canAdd = (try? result.get()).map { ArchiveZIPUpdater().canAdd(to: $0) } ?? false
             DispatchQueue.main.async { [self] in
                 self.pendingURL = nil
                 self.finish()
                 switch result {
                 case .success(let value):
-                    self.snapshot = value; self.index = value.index
+                    self.snapshot = value; self.index = value.index; self.zipAdditionAvailable = canAdd
                     self.currentPath = ""; self.back = []; self.forward = []
                     self.window?.title = url.lastPathComponent
                     self.window?.representedURL = url
@@ -254,6 +263,55 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate,
                             if let supplied { self?.test(url, password: supplied) }
                         }
                     } else { present(error) }
+                }
+            }
+        }
+    }
+    @objc func addFiles(_ sender: Any?) { chooseAdditions(folder: false) }
+    @objc func addFolder(_ sender: Any?) { chooseAdditions(folder: true) }
+    private var canAddToZIP: Bool {
+        guard !isBusy, zipAdditionAvailable, let snapshot else { return false }
+        return FileManager.default.isWritableFile(atPath: snapshot.url.path)
+            && FileManager.default.isWritableFile(atPath: snapshot.url.deletingLastPathComponent().path)
+    }
+    private func chooseAdditions(folder: Bool) {
+        guard canAddToZIP, let window, window.attachedSheet == nil else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = !folder; panel.canChooseDirectories = folder
+        panel.allowsMultipleSelection = !folder
+        panel.prompt = "Add"
+        panel.message = "Add \(folder ? "a folder" : "files") at the archive root. Existing names are never replaced."
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK else { return }
+            self?.addItems(panel.urls)
+        }
+    }
+    /// Shared by both native pickers; all transaction work stays in ArkivCore.
+    func addItems(_ urls: [URL]) {
+        guard canAddToZIP, !urls.isEmpty, let snapshot else { return }
+        let token = begin("Adding to ZIP…")
+        worker.async { [self] in
+            let throttle = ProgressThrottle()
+            let result = Result {
+                try ArchiveZIPUpdater().add(sources: urls, to: snapshot, cancellation: token) { progress in
+                    guard throttle.shouldUpdate() else { return }
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.isBusy else { return }
+                        self.status.stringValue = "\(progress.files) entries · \(ByteCountFormatter.string(fromByteCount: Int64(progress.bytes), countStyle: .file)) processed"
+                    }
+                }
+            }
+            DispatchQueue.main.async { [self] in
+                finish()
+                modificationFeedback(result)
+                switch result {
+                case .success(let url):
+                    // Publication is already complete. Refresh failures are read errors,
+                    // not a failed transaction and never trigger another success sound.
+                    self.snapshot = nil; self.index = nil; self.zipAdditionAvailable = false
+                    search.stringValue = ""
+                    load(url)
+                case .failure(let error): present(error)
                 }
             }
         }
@@ -328,7 +386,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate,
         guard let snapshot, let window else { return }
         let alert = NSAlert()
         alert.messageText = snapshot.url.lastPathComponent
-        alert.informativeText = "\(snapshot.entries.count) entries\nBackend: \(LibArchiveEngine.version)\n\nRead-only browser. Extraction limit: 100,000 entries / 20 GiB. ZIP and 7z creation are available from File → Create Archive. 7z supports AES-256. Archive modification is unavailable."
+        alert.informativeText = "\(snapshot.entries.count) entries\nBackend: \(LibArchiveEngine.version)\n\nExtraction limit: 100,000 entries / 20 GiB. ZIP and 7z creation are available from File → Create Archive. 7z supports AES-256. Add Files/Add Folder are available for supported writable ZIPs. Other modification is unavailable."
         alert.beginSheetModal(for: window)
     }
     @objc func copyPath(_ sender: Any?) {
@@ -382,6 +440,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate,
     }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
+        case #selector(addFiles(_:)), #selector(addFolder(_:)): return canAddToZIP && window?.attachedSheet == nil
         case #selector(copyPath(_:)), #selector(extractSelected(_:)): return !isBusy && !selectedPaths().isEmpty
         case #selector(testArchive(_:)), #selector(extractAll(_:)), #selector(showInfo(_:)): return !isBusy && snapshot != nil
         case #selector(goUp(_:)): return !isBusy && !currentPath.isEmpty

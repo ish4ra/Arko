@@ -6,7 +6,7 @@ The first foundation contains an AppKit archive table, folder navigation, search
 
 **Validation:** [macOS CI](https://github.com/ish4ra/Arkiv/actions/workflows/macos.yml) runs engine/security fixtures, Swift/AppKit tests, branding checks, arm64 and Universal app verification, and mounted DMG verification. Interactive Finder discovery, UI/accessibility, and Gatekeeper behavior still require a real Mac; this is not a production release.
 
-Fixture-verified formats include ZIP Store/Deflate, TAR, 7z/LZMA2 and stored RAR5. Creation supports ZIP and 7z, including 7z AES-256 content and optional filename encryption. This is not blanket codec/multipart support. Modification, preview/open, Quick Look, drag/drop and advanced tools remain deferred.
+Fixture-verified formats include ZIP Store/Deflate, TAR, 7z/LZMA2 and stored RAR5. Creation supports ZIP and 7z, including 7z AES-256 content and optional filename encryption. This is not blanket codec/multipart support. ZIP root additions are available for supported writable archives; other modification, preview/open, Quick Look, drag/drop and advanced tools remain deferred.
 
 ## Download for Mac testing
 
@@ -37,7 +37,7 @@ The repository is already isolated in Codex cloud tasks; reuse its checkout and 
 - [Original icon direction](docs/branding.md)
 - [Third-party notices](docs/third-party-licenses.md)
 
-Next: confirm/fix macOS CI and real-Mac browser behavior, then implement owned preview workspaces, single-entry Open/Quick Look and TAR creation with round-trip tests. ZIP/7z creation and 7z AES-256 are implemented; archive modification remains deferred.
+Next: confirm/fix macOS CI and real-Mac browser behavior, then implement owned preview workspaces, single-entry Open/Quick Look and TAR creation with round-trip tests. ZIP/7z creation and 7z AES-256 are implemented; ZIP Add Files/Add Folder are implemented; other modification remains deferred.
 
 ## Finder extraction
 

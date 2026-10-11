@@ -163,6 +163,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let create = file.addItem(withTitle: "Create Archive…", action: #selector(createArchive(_:)), keyEquivalent: "N"); create.target = self
         let open = file.addItem(withTitle: "Open Archive…", action: #selector(openArchive(_:)), keyEquivalent: "o"); open.target = self
         file.addItem(.separator())
+        file.addItem(withTitle: "Add Files…", action: #selector(BrowserWindowController.addFiles(_:)), keyEquivalent: "")
+        file.addItem(withTitle: "Add Folder…", action: #selector(BrowserWindowController.addFolder(_:)), keyEquivalent: "")
+        file.addItem(.separator())
         file.addItem(withTitle: "Extract Selected…", action: #selector(BrowserWindowController.extractSelected(_:)), keyEquivalent: "e")
         file.addItem(withTitle: "Extract All…", action: #selector(BrowserWindowController.extractAll(_:)), keyEquivalent: "E")
         file.addItem(withTitle: "Test Archive", action: #selector(BrowserWindowController.testArchive(_:)), keyEquivalent: "t")

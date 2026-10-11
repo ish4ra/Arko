@@ -8,7 +8,8 @@
 | macOS application validation | Native compilation, tests, arm64 app/icon packaging and signature verification passed macOS CI; interactive validation outstanding |
 | Create ZIP | Store/Deflate, native creation setup, direct Finder multi-selection compression; [details](creation.md) |
 | Create/read 7z / AES-256 / filename encryption | LZMA2, content/header encryption, native password prompt/retry; [backend and limits](sevenzip.md) |
-| Modify / ZIP AES | Deferred; no enabled UI claims |
+| Add to existing ZIP | Add Files/Add Folder at root; verified atomic rewrite of supported ZIP32; [limits](zip-additions.md) |
+| Other modification / ZIP AES | Deferred; no enabled UI claims |
 | Solid archives / multipart / comments | Deferred compatibility work |
 | Integrity test command | ZIP/7z full-data/CRC checks; TAR structure/readability with explicit checksum warning; native progress/cancellation/password retry |
 | Checksums / split-combine / benchmark / CLI | Deferred |

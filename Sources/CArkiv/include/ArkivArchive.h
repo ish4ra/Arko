@@ -43,4 +43,12 @@ int arkiv_create_archive(const char *const *, size_t, const char *, const char *
 const char *arkiv_seven_loaded_library(void);
 int arkiv_is_seven(const char *);
 int arkiv_unlock_seven(const char *, const char *, const char *, arkiv_cancel *);
+
+/* Conservative ZIP32 mutation; transaction owns pinned source and parent descriptors. */
+typedef struct arkiv_zip_transaction arkiv_zip_transaction;
+arkiv_zip_transaction *arkiv_zip_begin(const char *, char *, size_t);
+void arkiv_zip_end(arkiv_zip_transaction *);
+int arkiv_zip_prepare(arkiv_zip_transaction *, const char *, const char *, arkiv_cancel *, arkiv_progress_callback, void *, char *, size_t);
+int arkiv_zip_commit(arkiv_zip_transaction *, arkiv_cancel *, char *, size_t);
+
 #endif

@@ -4,7 +4,7 @@ These are **fixture results on Linux with libarchive 3.7.4 and in [macOS CI](htt
 
 | Format | Browse/extract evidence | Create/modify | Encryption/multipart/comments/integrity command |
 | --- | --- | --- | --- |
-| ZIP | Stored and Deflate; nested Unicode paths, empty, corrupt CRC | Default creation: Store/Deflate; modification deferred | Test reads data and checks CRC; encryption/multipart/comments deferred |
+| ZIP | Stored and Deflate; nested Unicode paths, empty, corrupt CRC | Default creation: Store/Deflate; [ZIP32 root additions](zip-additions.md) | Test reads data and checks CRC; encryption/multipart/comments deferred |
 | TAR | Regular file, nested paths, rejection of links/devices | Not implemented | Test checks structure/readability; warning: no payload checksum |
 | 7z | LZMA/LZMA2; plain/encrypted fixtures and round trips | Create LZMA2; no modification | AES-256 content, optional filenames; full-data/CRC Test; no multipart |
 | RAR5 | One stored upstream fixture, byte-for-byte extraction | Never create RAR | Not implemented |
